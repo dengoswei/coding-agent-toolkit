@@ -27,7 +27,7 @@ import {
   withInstallerLock,
 } from "./lib.mjs";
 
-import { applyToolbar, prepareToolbar } from "./toolbar.mjs";
+import { applyToolbar, prepareToolbar, installScreamControl } from "./toolbar.mjs";
 
 function usage() {
   return `Insights local installer
@@ -38,6 +38,7 @@ Usage:
 
 Options:
   --open                Open an Insights tab after installation (optional)
+  --integrations        Enable connected-machine, Cursor account, and feedback statistics
   --force               Replace owned files edited locally (never unowned files or links)
   --source <folder>     Source package folder containing mods/insights (development)
   --app-home <folder>   Herdr app home (default: $HERDR_APP_HOME or ~/.config/herdr-app)
@@ -57,6 +58,7 @@ function parseArgs(argv) {
     force: false,
     help: false,
     open: false,
+    integrations: false,
     source: null,
   };
 
@@ -69,6 +71,10 @@ function parseArgs(argv) {
     }
     if (argument === "--open") {
       options.open = true;
+      continue;
+    }
+    if (argument === "--integrations") {
+      options.integrations = true;
       continue;
     }
     if (argument === "--force") {
@@ -339,7 +345,14 @@ async function main() {
       // during validation before replacing any live files.
       plan = await prepareInstall(appHome, plan.source, options.force);
       await applyInstall(plan);
-      await applyToolbar(toolbar);
+      await applyToolbar(toolbar, { expand: options.integrations });
+      if (options.integrations) {
+        await installScreamControl(appHome);
+        const integrations = path.join(dataDir(appHome), "integrations.json");
+        await assertNoSymlinkComponents(appHome, integrations);
+        await writeFileAtomic(integrations, `${JSON.stringify({ enabled: true })}\n`, 0o600);
+        console.log("Enabled dynamic Herdr machines, Cursor account usage, and feedback statistics.");
+      }
       // Default installation never opens a tab.
       if (options.open) {
         const opened = await runHerdr(["do", "tab.new", '{"name":"Insights","mod":"insights"}'], {

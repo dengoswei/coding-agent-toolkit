@@ -14,6 +14,10 @@ import {
   deriveDashboard,
 } from "./analytics.js";
 import { collectSnapshot, readCommittedSnapshot } from "./collector.mjs";
+import { fleetSnapshots, mergeFleet } from "./core/fleet.mjs";
+import { cursorSnapshot } from "./core/cursor.mjs";
+import { collectNudges, readUserEvents } from "./core/events.mjs";
+import { readFile } from "node:fs/promises";
 
 function usage() {
   return [
@@ -78,6 +82,7 @@ function compactSnapshot(snapshot, rowCount = 0) {
     sourceStats,
     scan,
     warnings = [],
+    machines = [],
   } = snapshot ?? {};
   return {
     version,
@@ -95,6 +100,7 @@ function compactSnapshot(snapshot, rowCount = 0) {
     sourceStats,
     scan: scan && typeof scan === "object" ? scan : null,
     warnings: Array.isArray(warnings) ? warnings : [],
+    machines,
   };
 }
 
@@ -136,10 +142,13 @@ export async function run(argv, environment = {}) {
   const storePath = path.resolve(options.store);
   const home = path.resolve(options.home ?? environment.home ?? os.homedir());
   const dashboardOptions = parseOptions(options.options);
+  let integrations = false;
+  try { integrations = JSON.parse(await readFile(path.join(path.dirname(storePath), "integrations.json"), "utf8")).enabled === true; } catch { /* Opt-in only. */ }
 
   if (command === "prepare" || command === "status") {
     // Never takes the writer lock: a long indexer must not block the cached UI.
-    const snapshot = await readCommittedSnapshot(storePath);
+    const local = await readCommittedSnapshot(storePath);
+    const snapshot = integrations ? await enrichedSnapshot(local, storePath, home) : local;
     const derived = derive(snapshot, dashboardOptions);
     return {
       exitCode: 0,
@@ -148,15 +157,33 @@ export async function run(argv, environment = {}) {
     };
   }
 
-  const snapshot = await collectSnapshot(command, {
-    store: storePath, home, config: options.config,
-  });
+  const collect = collectSnapshot(command, { store: storePath, home, config: options.config });
+  const snapshot = integrations
+    ? await Promise.all([collect, fleetSnapshots(storePath, { refresh: true }), cursorSnapshot(storePath, home, { refresh: true }),
+      collectNudges(path.dirname(storePath), home).catch(() => [])])
+      .then(([local, fleet, cursor, nudges]) => enrichedSnapshot(local, storePath, home, { fleet, cursor, nudges }))
+    : await collect;
   const derived = derive(snapshot, dashboardOptions);
   return {
     exitCode: 0,
     stdout: `${JSON.stringify(presentation(command, snapshot, dashboardOptions, derived.dashboard, derived.error))}\n`,
     stderr: "",
   };
+}
+
+async function enrichedSnapshot(local, storePath, home, supplied = {}) {
+  const [fleet, cursor, screams] = await Promise.all([
+    supplied.fleet ?? fleetSnapshots(storePath), supplied.cursor ?? cursorSnapshot(storePath, home), readUserEvents(path.dirname(storePath)),
+  ]);
+  let nudges = supplied.nudges;
+  if (!nudges) {
+    try { const saved = JSON.parse(await readFile(path.join(path.dirname(storePath), "autopilot.json"), "utf8")); nudges = Object.values(saved.events ?? {}); }
+    catch { nudges = []; }
+  }
+  const merged = mergeFleet(local, fleet);
+  merged.rows.push(...cursor.rows); merged.machines.push(...cursor.machines);
+  merged.events.push(...nudges, ...screams); merged.warnings.push(...cursor.warnings);
+  return merged;
 }
 
 function isEntryPoint() {

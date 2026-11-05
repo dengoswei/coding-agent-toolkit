@@ -12,6 +12,11 @@ From the parent of `herdr-insights/`; no `npm install` needed:
 npm run install:local --prefix herdr-insights
 ```
 
+This fork's optional extensions are enabled with `-- --integrations`. They discover
+connected Herdr machines dynamically, retain offline history, read Cursor account
+usage, and add a Scream feedback control without adding keys. Details and privacy
+boundaries: [extension guide](../docs/herdr-insights-extension.md).
+
 The installer checks `mods/insights` before copying it to the app home, which
 defaults to `$HERDR_APP_HOME` or `~/.config/herdr-app`. First install creates and
 selects a personal layout whose **Insights** button sits beside the native tabs.

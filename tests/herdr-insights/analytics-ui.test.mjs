@@ -624,7 +624,9 @@ test("dashboard is divided into token and model usage sections", () => {
   // Period and facet filters belong to the model usage section only.
   assert.ok(mainSource.indexOf('sectionHeader("Model usage"') < mainSource.indexOf("this.filtersBar"));
   assert.ok(mainSource.indexOf("this.filtersBar") > mainSource.indexOf("this.heatmapCard"));
-  assert.doesNotMatch(mainSource, /filterMenu\("source"|filterMenu\("project"|breakdownCard|selectedDetail/);
+  assert.match(mainSource, /filterMenu\("machine"/);
+  assert.match(mainSource, /filterMenu\("source"/);
+  assert.doesNotMatch(mainSource, /filterMenu\("project"|breakdownCard|selectedDetail/);
 });
 
 test("usage logos prefer model marks, then provider marks, then initials", async () => {

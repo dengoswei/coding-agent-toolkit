@@ -1,5 +1,10 @@
 # Insights
 
+This personal fork adds dynamic Herdr machine statistics, Cursor account usage,
+automatic continuation counts, and a **Scream** feedback button. Enable with
+`npm run install:local --prefix herdr-insights -- --integrations` from the repo root.
+See [extension behavior and limitations](../docs/herdr-insights-extension.md).
+
 A native [Herdr](https://herdr.dev) dashboard for coding-agent token usage.
 See which models you use, how usage changes over time, and your daily activity.
 Reads local sessions from **Pi, Codex, Claude Code, OpenCode, and Antigravity**.
@@ -39,7 +44,10 @@ click-state rules. Set `HERDR_APP_HOME` to use a different app home.
 
 ## Privacy
 
-No network requests or uploads. The mod runs a local Node helper, reads session
+The base collector makes no network requests or uploads. With `--integrations`,
+the presenter uses existing Herdr machine connections and Cursor's official
+account export endpoint; see the extension document for retained data and scope.
+The mod runs a local Node helper, reads session
 files and OpenCode/Antigravity SQLite databases, and writes usage metadata to
 `~/.config/herdr-app/data/insights/insights.json`. It does not store prompt or
 response text or modify source transcripts.

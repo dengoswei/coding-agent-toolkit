@@ -36,6 +36,23 @@ function toolbarButton(layout) {
   return nodes.find((node) => node.id === "insights-toolbar-button");
 }
 
+test("integration opt-in compacts only an unchanged owned legacy toolbar and preserves other settings", async (t) => {
+  const root = await temporaryRoot(t), sourceRoot = await createSource(root), appHome = path.join(root, "app");
+  await writeTree(appHome, APP_FILES); const fake = await createFakeRunner(root);
+  assertSuccess(runInstall({ appHome, fake, sourceRoot }));
+  const file = path.join(appHome, "layouts/main-insights.json");
+  const layout = await readJson(file); toolbarButton(layout).size.px = 224;
+  const text = `${JSON.stringify(layout, null, 2)}\n`; await fs.writeFile(file, text);
+  const recordFile = path.join(appHome, "data/insights/toolbar-install.json");
+  const record = await readJson(recordFile); record.hash = hash(text); await fs.writeFile(recordFile, JSON.stringify(record));
+  assertSuccess(runInstall({ appHome, fake, sourceRoot, extra: ["--integrations"] }));
+  assert.equal(toolbarButton(await readJson(file)).size.px, 104);
+  assert.equal((await readJson(path.join(appHome, "data/insights/integrations.json"))).enabled, true);
+  assert.equal((await readJson(recordFile)).hash, hash(await fs.readFile(file, "utf8")));
+  assert.equal(await fs.readFile(path.join(appHome, "keys.json"), "utf8"), APP_FILES["keys.json"]);
+  assert.equal(await fs.readFile(path.join(appHome, "data/insights/insights.json"), "utf8"), APP_FILES["data/insights/insights.json"]);
+});
+
 
 test("standalone distribution installs one mod and a single-mod toolbar without a launcher", async (t) => {
   const root = await temporaryRoot(t);

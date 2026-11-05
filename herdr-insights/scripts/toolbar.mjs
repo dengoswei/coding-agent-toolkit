@@ -111,8 +111,25 @@ export async function prepareToolbar(appHome) {
   throw new Error("No free Insights layout name; existing layouts and click state were preserved.");
 }
 
-export async function applyToolbar(plan) {
-  if (plan.record) return;
+export async function applyToolbar(plan, { expand = false } = {}) {
+  if (plan.record) {
+    if (!expand) return;
+    const file = layoutFile(plan.appHome, plan.record.layout);
+    const original = await readRegular(plan.appHome, file);
+    if (sha256(original) !== plan.record.hash) throw new Error("Toolbar layout was edited locally; preserve it before updating Scream.");
+    const layout = JSON.parse(original);
+    const walk = (node) => {
+      if (node.id === BUTTON_ID && node.size?.px === 224) node.size.px = 104;
+      for (const child of node.children ?? []) walk(child);
+    };
+    walk(layout);
+    const updated = `${JSON.stringify(layout, null, 2)}\n`;
+    if (updated !== original) {
+      await writeFileAtomic(file, updated);
+      await writeFileAtomic(path.join(dataDir(plan.appHome), RECORD), `${JSON.stringify({ ...plan.record, hash: sha256(updated) }, null, 2)}\n`);
+    }
+    return;
+  }
   const { appHome, source, layout, file } = plan;
   // Checks may have taken seconds. Revalidate clone inputs immediately before
   // Herdr can copy state (its native clone may overwrite destination state).
@@ -140,6 +157,66 @@ export async function applyToolbar(plan) {
     throw error;
   }
   console.log(`Added Insights beside Files/Changes in personal layout ${layout}; Herdr's tabs mod is unchanged.`);
+}
+
+export function withScreamControl(source) {
+  const anchor = '.child(button("tab-new",';
+  if (!source.includes(anchor) || !source.includes('image } from "gpui-kit"')) throw new Error("Unsupported native tabs version for Scream placement");
+  const helper = `import * as screamHost from "herdr";
+function insightsScream(cx) {
+  const focus = screamHost.focused();
+  const target = { terminal: focus?.terminal, machine: screamHost.spaces().find(s => s.id === focus?.space)?.machine ?? null, at: new Date().toISOString() };
+  screamHost.playSound("mods/insights/scream.wav");
+  cx.spawn(async (_taskCx) => {
+    try {
+      if (!target.terminal) throw new Error("Focus an agent terminal first");
+      const runtime = JSON.parse(await screamHost.readTextFile(screamHost.appHome() + "/mods/insights/runtime.json"));
+      const result = await screamHost.exec(runtime.node, [screamHost.appHome() + "/mods/insights/actions.mjs", "scream", screamHost.appHome() + "/data/insights", JSON.stringify(target)]);
+      if (result.code !== 0) throw new Error("Could not save feedback; focus an agent terminal and try again");
+    } catch (error) { screamHost.notify({title:"Scream was not recorded", body:String(error.message), level:"error"}); }
+  });
+}
+`;
+  const control = `.child(div().id("insights-scream-chicken").w(32).h(26).flex_none().flex().items_center().justify_center().rounded(6)
+        .hover(s => s.bg(t.hover)).active(s => s.bg(t.selected)).tooltip("尖叫")
+        .on_mouse_down("left", stop).on_click((_e, cx) => insightsScream(cx))
+        .child(image("mods/insights/scream-chicken.svg").id("scream-chicken-image").w(22).h(22).active(s => s.w(16))))
+      `;
+  return `${helper}\n${source.replace(anchor, `${control}${anchor}`)}`;
+}
+
+export async function installScreamControl(appHome) {
+  const record = await readRecord(appHome);
+  if (!record) throw new Error("Insights toolbar is not installed");
+  const file = layoutFile(appHome, record.layout);
+  const original = await readRegular(appHome, file);
+  if (sha256(original) !== record.hash) throw new Error("Personal layout changed; refusing to replace its tab controls");
+  let mod = record.scream_mod;
+  if (!mod) {
+    const source = await readRegular(appHome, path.join(appHome, "mods/tabs/main.js"));
+    if (source === null) return; // Headless installer fixtures have no shipped UI.
+    withScreamControl(source); // Validate before cloning anything.
+    for (let suffix = 1; suffix < 100; suffix++) {
+      const candidate = `insights-tabs${suffix === 1 ? "" : `-${suffix}`}`;
+      if (!await lstatOrNull(path.join(appHome, "mods", candidate))) { mod = candidate; break; }
+    }
+    if (!mod) throw new Error("No free personal tabs mod name");
+    await command(appHome, ["do", "mod.clone", JSON.stringify({ name: "tabs", as: mod })]);
+    const main = path.join(appHome, "mods", mod, "main.js");
+    const cloned = await readRegular(appHome, main);
+    await writeFileAtomic(main, withScreamControl(cloned));
+    await command(appHome, ["check", path.dirname(main)]);
+  }
+  assertName(mod);
+  const layout = JSON.parse(original);
+  const walk = (node) => {
+    if (node.id === "insights-original-tabs") node.content.mod = mod;
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(layout);
+  const updated = `${JSON.stringify(layout, null, 2)}\n`;
+  if (updated !== original) await writeFileAtomic(file, updated);
+  await writeFileAtomic(path.join(dataDir(appHome), RECORD), `${JSON.stringify({ ...record, hash: sha256(updated), scream_mod: mod }, null, 2)}\n`);
 }
 
 export async function prepareToolbarRemoval(appHome) {

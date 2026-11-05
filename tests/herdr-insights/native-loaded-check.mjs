@@ -105,7 +105,7 @@ try {
   }
   const today = todayKey();
   const options = {
-    filters: { provider: "all", model: "all" },
+    filters: { machine: "all", source: "all", provider: "all", model: "all" },
     period: "all",
     year: Number(today.slice(0, 4)),
     heatmapMode: "daily",

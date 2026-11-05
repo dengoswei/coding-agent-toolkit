@@ -356,6 +356,26 @@ test("model series stacks weekly tokens by top model with an Other bucket", () =
   assert.deepEqual(noOther.models, ["model-b", "model-a"]);
 });
 
+test("chart follows the same calendar range as the selected model-usage period", () => {
+  const value = snapshot({ rows: [
+    row({ day: "2026-01-05", tokens: { input: 7 } }),
+    row({ day: "2026-10-15", tokens: { input: 11 } }),
+    row({ day: "2026-11-05", tokens: { input: 13 } }),
+    row({ day: "2025-06-12", tokens: { input: 17 } }),
+  ] });
+  for (const [period, unit, total] of [["week", "day", 13], ["month", "day", 13], ["year", "month", 31]]) {
+    const derived = deriveDashboard(value, { today: "2026-11-06", period });
+    assert.equal(derived.modelSeries.windowTotal, total);
+    assert.equal(derived.modelSeries.windowTotal, derived.totals.total);
+    assert.deepEqual(derived.modelSeries.range, { start: derived.range.start, end: derived.range.end });
+    assert.equal(derived.modelSeries.bucketUnit, unit);
+  }
+  const past = deriveDashboard(value, { today: "2026-11-06", period: "year", year: 2025 });
+  assert.equal(past.modelSeries.weeks.length, 12);
+  assert.equal(past.modelSeries.windowTotal, 17);
+  assert.deepEqual(past.modelSeries.range, { start: "2025-01-01", end: "2025-12-31" });
+});
+
 test("compact values cover billions and exact values keep every digit", () => {
   assert.equal(formatCompact(0), "0");
   assert.equal(formatCompact(999), "999");
@@ -452,7 +472,7 @@ test("dashboard cache reuses facet-aware derivation until snapshot or state chan
   assert.equal(calls, 1);
   assert.equal(repeated, first);
   assert.equal(repeated.facets.model, first.facets.model);
-  assert.deepEqual(Object.keys(first.facets).sort(), ["model", "project", "provider", "source"]);
+  assert.deepEqual(Object.keys(first.facets).sort(), ["machine", "model", "project", "provider", "source"]);
   assert.equal(first.facets.model.total, 30);
   assert.deepEqual(first.years, [2024]);
   assert.equal(cache.peek(value, options), first);

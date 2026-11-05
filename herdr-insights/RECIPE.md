@@ -1,5 +1,29 @@
 # Insights
 
+## Personal fork addendum
+
+With `--integrations`, this fork adds dynamic discovery through `hc machine ls`,
+remote incremental collectors and retained metadata-only snapshots in `fleet.json`;
+Cursor account billing in `cursor-account.json`; producer-log continuation history
+in `autopilot.json`; and explicit user feedback in `events.jsonl`. Keep Cursor
+account billing distinct from machine/session usage. Show stale coverage and
+unknown attribution honestly. Remote source transcripts and credentials stay on
+their machine; Cursor's official account usage export uses an existing local login.
+
+The optional installer clones native tabs into an owned personal mod to place a
+yellow rubber-chicken icon before the native + / Files / Changes controls.
+Insights remains last. Each squeeze gives native pressed feedback and plays the
+bundled short `scream.wav`, then independently records the focused terminal in the
+background. There is no Saving label, busy gate, Undo button, or new shortcut.
+Never edit the shipped tabs. Keep unknown session/model fields rather than choosing
+the most recent directory match. Week/month/year feedback tables distinguish
+explicit user Screams from acknowledged/issued automatic continuations.
+
+The selected model-usage period also controls its chart: daily week/month buckets,
+monthly year buckets, and the existing trailing weekly trend for All.
+The remainder describes upstream base behavior; this addendum takes precedence
+for the optional extensions.
+
 A native Herdr dashboard for token usage across Pi, Codex, Claude Code, OpenCode,
 and Antigravity. It reads existing local session data, shows model rankings and activity,
 and opens in its own tab from an Insights button beside the native tabs. One mod

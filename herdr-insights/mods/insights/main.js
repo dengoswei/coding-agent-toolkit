@@ -1,4 +1,4 @@
-// Insights: a native, local-only usage dashboard. No DOM, no shell, no stored cx.
+// Insights: native usage and feedback statistics. No DOM or stored contexts.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, Input, InputState, Editor, EditorState, Popover } from "gpui-base";
 import { exec, appHome, home, theme, settings, nextCommand, panes, props, run, readTextFile, spaces } from "herdr";
@@ -373,6 +373,7 @@ function changeColor(change, c) {
 }
 
 function allLabelFor(field) {
+  if (field === "machine") return "All data";
   if (field === "source") return "All sources";
   if (field === "provider") return "All providers";
   if (field === "model") return "All models";
@@ -380,6 +381,7 @@ function allLabelFor(field) {
 }
 
 function facetLabel(field, value, config) {
+  if (field === "machine") return value === "local" ? "This Mac" : value === "cursor-account" ? "Cursor account" : value === "machines" ? "All machines" : value;
   if (field === "source") return sourceLabel(value, config);
   if (field === "provider") return value === "unknown" ? "Unknown provider" : value;
   if (field === "model") return value === "unknown" ? "Unknown model" : value;
@@ -390,8 +392,9 @@ function buildFacetOptions(field, facet, config) {
   const stats = facet?.stats ?? [];
   const options = stats.map((stat) => ({
     value: stat.value,
-    label: facetLabel(field, stat.value, config),
-    detail: field === "project" && stat.value !== "unknown" ? stat.value : "",
+    label: stat.label ?? facetLabel(field, stat.value, config),
+    detail: field === "machine" && stat.value === "cursor-account" ? "Account-wide · all devices"
+      : field === "project" && stat.value !== "unknown" ? stat.value : "",
     meta: stat.meta ?? formatCompact(stat.tokens),
     tokens: stat.tokens,
     tooltip: stat.tooltip ?? `${formatInt(stat.tokens)} tokens · ${formatInt(stat.sessions)} sessions`,
@@ -421,6 +424,8 @@ function buildFacetOptions(field, facet, config) {
     total,
     options: [
       { value: "all", label: allLabelFor(field), detail: "", meta: facet?.totalMeta ?? formatCompact(total), tokens: total, tooltip: facet?.totalTooltip ?? `${formatInt(total)} tokens` },
+      ...(field === "machine" ? [{ value: "machines", label: "All machines", detail: "Session logs · excludes account billing",
+        meta: formatCompact(stats.filter((item) => item.value !== "cursor-account").reduce((sum, item) => sum + item.tokens, 0)) }] : []),
       ...visible,
     ],
   };
@@ -429,7 +434,7 @@ function buildFacetOptions(field, facet, config) {
 function selectedFacet(facet, value, field, config) {
   if (value === "all") return { value: "all", label: allLabelFor(field) };
   const found = (facet?.stats ?? []).find((stat) => stat.value === value);
-  return { value, label: facetLabel(field, found?.value ?? value, config) };
+  return { value, label: found?.label ?? facetLabel(field, found?.value ?? value, config) };
 }
 
 
@@ -453,7 +458,7 @@ export default class Insights extends View {
     this.error = null;
     this.width = 960;
     this.height = 800;
-    this.filters = { provider: "all", model: "all" };
+    this.filters = { machine: "all", source: "all", provider: "all", model: "all" };
     this.period = "all";
     this.year = Number(todayKey().slice(0, 4));
     this.heatmapMode = "daily";
@@ -533,7 +538,7 @@ export default class Insights extends View {
             commandCx.notify();
           }
         } else if (name === "filters.clear") {
-          this.filters = { provider: "all", model: "all" };
+          this.filters = { machine: "all", source: "all", provider: "all", model: "all" };
           this.scheduleDashboard(commandCx, { force: true });
           commandCx.notify();
         }
@@ -821,7 +826,7 @@ export default class Insights extends View {
     const delay = scan.status === "partial" ? 250
       : scan.status === "running" || scan.status === "starting" ? 900
         : scan.status === "reconfiguring" ? 500
-          : null;
+          : this.snapshot?.machines?.some((machine) => ["partial", "running", "pending"].includes(machine.status)) ? 4000 : null;
     if (delay === null) {
       this.cancelScanContinue();
       return;
@@ -1427,7 +1432,7 @@ export default class Insights extends View {
 
   toolbar() {
     const t = theme();
-    return h_flex().size_full().pr(10).items_center()
+    return h_flex().size_full().pr(10).gap(4).items_center()
       .bg(t.chrome).border_b(1).border_color(t.border)
       .child(h_flex().id("insights-open").h(26).px(8).gap(5).flex_none()
         .items_center().rounded(6).text_size(12).bg(t.chrome).text_color(t.muted)
@@ -1546,11 +1551,17 @@ export default class Insights extends View {
     const { config, rowCount, range, lifetime, peak, streaks, heatmap, leaders, selectedDay, selectedTotals, selectedTop, years } = derived;
 
     return v_flex().w_full().gap(G.lg)
+      .child(this.filterMenu("machine", "Data scope", this.filters.machine, derived.facets.machine, config, c, (value, pickCx) => {
+        this.filters.machine = value; this.scheduleDashboard(pickCx, { force: true });
+      }))
+      .child(this.machineStatus(c))
       .child(this.metricStrip(c, lifetime, peak, streaks))
       .when(rowCount === 0, (el) => el.child(this.emptyNotice(c, config)))
       .child(this.sectionHeader("Token usage", c))
       .child(this.heatmapCard(c, config, heatmap, selectedDay))
       .child(this.tokenDetailCard(c, heatmap, selectedDay, derived.today, selectedTotals, selectedTop, lifetime, derived.lifetimeTop))
+      .child(this.eventTable(c, "Screams by model", derived.eventStats?.screams ?? [], "Explicit user feedback · counts, not an objective model rating"))
+      .child(this.eventTable(c, "Automatic continuations", derived.eventStats?.nudges ?? [], "Acknowledged shepherd sends and issued stop-hook continuations; earlier logs may have been pruned", true))
       .child(this.sectionHeader("Model usage", c))
       .child(this.filtersBar(c, config, range, derived.facets, years))
       .when(Boolean(derived.modelSeries?.weeks?.length), (el) => el.child(this.modelChartCard(c, derived.modelSeries)))
@@ -1561,6 +1572,28 @@ export default class Insights extends View {
     return h_flex().w_full().items_center().gap(G.md).pt(G.sm)
       .child(div().text_size(T.card).font_semibold().text_color(c.text).child(title))
       .child(div().flex_1().h(1).bg(c.border));
+  }
+
+  machineStatus(c) {
+    const machines = this.snapshot?.machines ?? [];
+    return v_flex().w_full().gap(4).children(machines.map((machine, index) => h_flex().w_full().gap(8).items_center()
+      .child(div().flex_1().min_w(0).text_size(T.small).text_color(c.mutedForeground).truncate()
+        .child(`${machine.name}${machine.origin ? ` · ${machine.origin}` : ""} · ${machine.status}${machine.total ? ` · ${machine.processed}/${machine.total} files` : ""}${machine.coverage ? ` · ${machine.coverage}` : ""}`))
+      .child(div().id(`ins-machine-time-${index}`).text_size(T.label).text_color(c.dim)
+        .tooltip(machine.error ?? "Last successful snapshot; history stays when a machine disconnects")
+        .child(machine.syncedAt ? formatTimestamp(machine.syncedAt) : ""))));
+  }
+
+  eventTable(c, title, rows, description, nudge = false) {
+    const cell = (value, first = false) => div().flex_1().min_w(0).text_size(T.small).text_color(c.text)
+      .when(first, (el) => el.flex_basis(240)).truncate().child(String(value));
+    return card(c).gap(G.sm)
+      .child(cardHeader(title, description, c))
+      .child(h_flex().w_full().gap(8).children([cell(nudge ? "Origin / tool" : "Model", true), cell("Week"), cell("Month"), cell("Year"), cell("Retained total")]))
+      .when(!rows.length, (el) => el.child(mutedText("No recorded events in this scope.", c)))
+      .children(rows.map((row) => v_flex().w_full().gap(2).border_t(1).border_color(c.border).pt(6)
+        .child(h_flex().w_full().gap(8).children([cell(row.name, true), cell(row.week), cell(row.month), cell(row.year), cell(row.total)]))
+        .when(nudge, (el) => el.child(mutedText(`${row.sent} acknowledged · ${row.issued} issued · ${row.attempted} unsuccessful attempts · ${row.held} held / dry run (retained history)`, c)))));
   }
 
   filtersBar(c, config, _range, facets, years) {
@@ -1583,8 +1616,9 @@ export default class Insights extends View {
         }))))
       .child(this.filterMenu("provider", "Provider", this.filters.provider, facets.provider, config, c, (value, pickCx) => { this.filters.provider = value; this.scheduleDashboard(pickCx, { force: true }); }))
       .child(this.filterMenu("model", "Model", this.filters.model, facets.model, config, c, (value, pickCx) => { this.filters.model = value; this.scheduleDashboard(pickCx, { force: true }); }))
+      .child(this.filterMenu("source", "Tool", this.filters.source, facets.source, config, c, (value, pickCx) => { this.filters.source = value; this.scheduleDashboard(pickCx, { force: true }); }))
       .when(active, (el) => el.child(button("ins-clear-filters", "Clear filters", (_event, clickCx) => {
-        this.filters = { provider: "all", model: "all" };
+        this.filters = { machine: "all", source: "all", provider: "all", model: "all" };
         this.scheduleDashboard(clickCx, { force: true });
         clickCx.notify();
       }, c, { variant: "ghost" })));
@@ -1813,7 +1847,7 @@ export default class Insights extends View {
     const colors = new Map(series.models.map((name, index) => [name, modelChartColor(name, index)]));
 
     const bar = (week) => v_flex().flex_1().min_w(0).h(CHART_HEIGHT).justify_end()
-      .tooltip(`Week of ${dayLabel(week.start)} · ${formatCompact(week.total)} tokens`)
+      .tooltip(`${series.bucketUnit === "week" ? "Week of " : ""}${dayLabel(week.start)} · ${formatCompact(week.total)} tokens`)
       .when(week.total > 0 && maxTotal > 0, (el) => el.child(
         v_flex().w_full().flex_none().h(Math.max(2, Math.round((week.total / maxTotal) * CHART_HEIGHT)))
           .children(week.segments.map((segment) => div().w_full().flex_grow(Math.max(0.001, segment.tokens))
@@ -1831,7 +1865,7 @@ export default class Insights extends View {
     return card(c).gap(G.md)
       .child(cardHeader(
         "Top models",
-        `${weeks.length} weeks · ${formatCompact(series.windowTotal)} tokens · ${series.includeCache ? "cache included" : "cache excluded"}`,
+        `${series.label ?? `${weeks.length} weeks`} · ${formatCompact(series.windowTotal)} tokens · ${series.includeCache ? "cache included" : "cache excluded"}`,
         c,
       ))
       .when(maxTotal === 0, (el) => el.child(div().py(G.lg).text_size(T.body).text_color(c.mutedForeground)

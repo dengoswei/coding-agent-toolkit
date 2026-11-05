@@ -381,6 +381,7 @@ function cleanFilter(value) {
 
 function compileFilters(filters = {}) {
   return {
+    machine: cleanFilter(filters.machine),
     source: cleanFilter(filters.source ?? filters.harness),
     provider: cleanFilter(filters.provider),
     model: cleanFilter(filters.model),
@@ -390,6 +391,8 @@ function compileFilters(filters = {}) {
 
 function matchesCompiled(row, filters) {
   if (!row) return false;
+  if (filters.machine === "machines" && row.machine === "cursor-account") return false;
+  if (filters.machine && filters.machine !== "machines" && (row.machine ?? "local") !== filters.machine) return false;
   if (filters.source && row.harness !== filters.source) return false;
   if (filters.provider && row.provider !== filters.provider) return false;
   if (filters.model && row.model !== filters.model) return false;
@@ -407,6 +410,7 @@ export function filterRows(rows, filters = {}) {
 }
 
 function facetValue(row, field) {
+  if (field === "machine") return row?.machine ?? "local";
   const raw = field === "source" ? row?.harness : row?.[field];
   return raw === null || raw === undefined || raw === "" ? "unknown" : String(raw);
 }
@@ -447,7 +451,7 @@ export function facetStats(rows, field, includeCache = true) {
  */
 export function facetStatsAll(rows, filters = {}, includeCache = true) {
   const base = compileFilters(filters);
-  const fields = ["source", "provider", "model", "project"];
+  const fields = ["machine", "source", "provider", "model", "project"];
   const compiled = {};
   const maps = {};
   for (const field of fields) {
@@ -738,7 +742,14 @@ export function buildModelSeries(rows, options = {}) {
       ? options.today
       : todayKey();
   const endWeekStart = startOfWeek(endDay, weekStartsOn);
-  const startDay = addDays(endWeekStart, -(weekCount - 1) * 7);
+  const bucketUnit = ["day", "month"].includes(options.bucketUnit) ? options.bucketUnit : "week";
+  const startDay = isDay(options.startDay) ? options.startDay : addDays(endWeekStart, -(weekCount - 1) * 7);
+  const bucketStart = (day) => bucketUnit === "day" ? day : bucketUnit === "month" ? `${day.slice(0, 7)}-01` : startOfWeek(day, weekStartsOn);
+  const starts = [];
+  for (let day = bucketStart(startDay); day <= endDay;) {
+    starts.push(day);
+    day = bucketUnit === "month" ? addMonthsClamped(day, 1) : addDays(day, bucketUnit === "day" ? 1 : 7);
+  }
 
   const modelTotals = new Map();
   const weekly = new Map();
@@ -747,7 +758,7 @@ export function buildModelSeries(rows, options = {}) {
     const name = displayName(row?.model, "model");
     const tokens = rowTokenTotal(row, includeCache);
     modelTotals.set(name, (modelTotals.get(name) ?? 0) + tokens);
-    const weekStart = startOfWeek(row.day, weekStartsOn);
+    const weekStart = bucketStart(row.day);
     let bucket = weekly.get(weekStart);
     if (!bucket) {
       bucket = new Map();
@@ -766,8 +777,7 @@ export function buildModelSeries(rows, options = {}) {
   let maxTotal = 0;
   let windowTotal = 0;
   let hasOther = false;
-  for (let index = 0; index < weekCount; index += 1) {
-    const weekStart = addDays(startDay, index * 7);
+  for (const weekStart of starts) {
     const bucket = weekly.get(weekStart);
     const segments = [];
     let total = 0;
@@ -798,6 +808,8 @@ export function buildModelSeries(rows, options = {}) {
     maxTotal,
     windowTotal,
     includeCache,
+    bucketUnit,
+    label: options.label ?? `${weeks.length} ${bucketUnit}s`,
     range: { start: startDay, end: endDay },
   };
 }
@@ -954,15 +966,46 @@ function resolvedDashboardOptions(options = {}, fallbackToday = todayKey()) {
   };
 }
 
+/** Explicit user frustration and automatic continuation are separate signals. */
+export function eventStatistics(events, { today = todayKey(), machine = "all", weekStartsOn = 0 } = {}) {
+  const ranges = Object.fromEntries(["week", "month", "year"].map((period) => [period, periodRange(period, { today, weekStartsOn, year: Number(today.slice(0, 4)) })]));
+  const screams = new Map(), nudges = new Map(), seen = new Set();
+  let first = null, last = null;
+  for (const event of events) {
+    if (!event || !isDay(event.day) || event.day > today
+      || (machine === "machines" && event.machine === "cursor-account")
+      || (machine !== "all" && machine !== "machines" && machine && event.machine !== machine)) continue;
+    const id = `${event.machine ?? "local"}:${event.id}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (event.type !== "scream" && event.type !== "nudge_continue") continue;
+    first = first === null || event.day < first ? event.day : first;
+    last = last === null || event.day > last ? event.day : last;
+    const name = event.type === "scream" ? event.model || "unknown" : `${event.origin || "unknown"} · ${event.tool || "unknown"}`;
+    const map = event.type === "scream" ? screams : nudges;
+    const row = map.get(name) ?? { name, week: 0, month: 0, year: 0, total: 0, sent: 0, issued: 0, attempted: 0, held: 0 };
+    const actual = event.type === "scream" || ["sent", "issued"].includes(event.outcome);
+    if (actual) {
+      row.total++;
+      for (const period of ["week", "month", "year"]) if (rangeContains(event.day, ranges[period])) row[period]++;
+    }
+    if (event.type === "nudge_continue" && ["sent", "issued", "attempted", "held"].includes(event.outcome)) row[event.outcome]++;
+    map.set(name, row);
+  }
+  const sort = (map) => [...map.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name)).slice(0, 100);
+  return { screams: sort(screams), nudges: sort(nudges), first, last };
+}
+
 /**
  * One complete dashboard derivation. Keep this pure so the native view can
  * memoize it without serializing a snapshot for a cache key.
  */
 export function deriveDashboard(snapshot, options = {}) {
   const config = normalizeConfig(snapshot?.config ?? {});
-  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+  const allRows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
   const settings = resolvedDashboardOptions(options);
   const { filters, period, year, heatmapMode, leaderboardGroup, today } = settings;
+  const rows = filterRows(allRows, { machine: filters.machine });
   const years = availableYears(rows, today);
   const includeCache = config.includeCache;
   // Token usage (metrics, heatmap, day detail) always covers everything;
@@ -988,7 +1031,10 @@ export function deriveDashboard(snapshot, options = {}) {
     limit: 10,
   });
   const modelSeries = buildModelSeries(dimensionRows, {
+    startDay: range.start,
     endDay: range.end,
+    bucketUnit: period === "year" ? "month" : period === "week" || period === "month" ? "day" : "week",
+    label: period === "all" ? undefined : range.label,
     weekStartsOn: config.weekStartsOn,
     includeCache,
   });
@@ -1004,10 +1050,17 @@ export function deriveDashboard(snapshot, options = {}) {
     ? leaderboard(rows, null, { groupBy: "model", includeCache, limit: 1 }).entries[0] ?? null
     : null;
 
-  const facetStatsByField = facetStatsAll(rows, filters, includeCache);
+  const facetStatsByField = facetStatsAll(allRows, filters, includeCache);
   const facets = {};
-  for (const field of ["source", "provider", "model", "project"]) {
+  for (const field of ["machine", "source", "provider", "model", "project"]) {
     const stats = facetStatsByField[field];
+    if (field === "machine") {
+      for (const machine of snapshot?.machines ?? []) {
+        const existing = stats.find((stat) => stat.value === machine.id);
+        if (existing) existing.label = machine.name;
+        else stats.push({ value: machine.id, label: machine.name, rows: 0, sessions: 0, tokens: 0, meta: "0" });
+      }
+    }
     const total = stats.reduce((sum, stat) => sum + stat.tokens, 0);
     facets[field] = {
       stats,
@@ -1045,6 +1098,7 @@ export function deriveDashboard(snapshot, options = {}) {
     selectedTop,
     lifetimeTop,
     facets,
+    eventStats: eventStatistics(snapshot?.events ?? [], { today, machine: filters.machine, weekStartsOn: config.weekStartsOn }),
     modelSeries,
   };
 }
@@ -1054,6 +1108,7 @@ const DASHBOARD_KEY_FIELDS = [
   "configSource",
   "includeCache",
   "weekStartsOn",
+  "machine",
   "source",
   "provider",
   "model",
@@ -1079,6 +1134,7 @@ function dashboardKey(snapshot, options = {}) {
     configSource: snapshot?.config ?? null,
     includeCache: config.includeCache,
     weekStartsOn: config.weekStartsOn,
+    machine: cleanFilter(filters.machine) ?? "all",
     source: cleanFilter(filters.source ?? filters.harness) ?? "all",
     provider: cleanFilter(filters.provider) ?? "all",
     model: cleanFilter(filters.model) ?? "all",
@@ -1137,6 +1193,7 @@ export function compactDashboard(derived) {
     selectedRowCount: Array.isArray(derived?.selectedRows) ? derived.selectedRows.length : 0,
     rowCount: Array.isArray(derived?.rows) ? derived.rows.length : 0,
     facets,
+    eventStats: derived?.eventStats ?? null,
     modelSeries: derived?.modelSeries ?? null,
     heatmap: {
       mode: heatmap.mode,
