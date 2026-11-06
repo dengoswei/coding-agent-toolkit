@@ -101,10 +101,20 @@ operation can append compensating records without erasing the audit log.
 PID-specific Claude metadata is checked against process start identity. Explicit
 labels and resume arguments are additional evidence; resume arguments describe
 the launch session and may become stale after an in-process session switch.
-Known Codex session models are looked up in read-only thread metadata; Claude
+Known Codex session models are looked up in read-only thread metadata. For a
+shared-daemon TUI without an explicit session argument, the model displayed in
+the current terminal footer is captured with `modelEvidence: terminal-footer`.
+Only status-bar-shaped rows at the bottom of the current screen are accepted;
+chat mentions and global defaults are excluded, and no screen text is persisted.
+This can resolve the model while the session identity remains unknown. Claude
 uses the last reported model in the exact session. Unknown session/model fields
 remain unknown. Directory recency is never used to guess identity. The foreground
 PID is rechecked before saving, to reject process changes during resolution.
+
+The command-line `actions.mjs clear <data-directory>` clears Scream records only,
+keeping a private rollback copy. A timestamp marker prevents a click started
+before clearing from reappearing when its background lookup finishes. Usage and
+continuation history are preserved; append operations share the cleanup lock.
 
 Screams are explicit user feedback, not an objective model-quality score.
 Tables show counts by model for the current calendar week, month, and year.

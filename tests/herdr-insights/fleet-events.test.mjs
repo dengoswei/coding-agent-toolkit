@@ -4,10 +4,11 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, rename } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import { exportSnapshot, validateExport, fleetSnapshots, mergeFleet } from "../../herdr-insights/mods/insights/core/fleet.mjs";
-import { appendEvent, collectNudges, nudgeEvent, readUserEvents } from "../../herdr-insights/mods/insights/core/events.mjs";
+import { appendEvent, clearScreams, collectNudges, nudgeEvent, readUserEvents } from "../../herdr-insights/mods/insights/core/events.mjs";
 import { parseBillingCache, parseUsageCsv } from "../../herdr-insights/mods/insights/core/cursor.mjs";
 import { deriveDashboard, eventStatistics } from "../../herdr-insights/mods/insights/analytics.js";
-import { resolveSession } from "../../herdr-insights/mods/insights/core/session.mjs";
+import { codexFooterModel, resolveSession } from "../../herdr-insights/mods/insights/core/session.mjs";
+import { captureScream } from "../../herdr-insights/mods/insights/actions.mjs";
 import { cursorSnapshot } from "../../herdr-insights/mods/insights/core/cursor.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { withScreamControl } from "../../herdr-insights/scripts/toolbar.mjs";
@@ -137,4 +138,46 @@ test("chicken button precedes native right controls, reacts immediately, and nev
   assert.match(result, /active\(s => s.w\(16\)\)/);
   assert.doesNotMatch(result, /Saving|screamBusy|undo|lastScream/);
   assert.throws(() => withScreamControl("unsupported tabs"));
+});
+
+test("Codex model comes from the actual footer, not a model mentioned in a prompt", () => {
+  const classic = "GPT-6.1-Sol high · ~/work · Task · Main [default]";
+  const modern = "Context 20% used · 475K window · GPT-6-Astra high · weekly 60% left";
+  assert.equal(codexFooterModel(classic), "gpt-6.1-sol");
+  assert.equal(codexFooterModel(modern), "gpt-6-astra");
+  assert.equal(codexFooterModel("› use GPT-6-Astra high · Main"), null);
+  assert.equal(codexFooterModel("The config model is gpt-6-astra"), null);
+  assert.equal(codexFooterModel("› GPT-6-Astra high · Main\n" + classic), "gpt-6.1-sol");
+  assert.equal(codexFooterModel(classic + "\n".repeat(10) + "unrelated output"), null, "old scrollback is not current model evidence");
+});
+
+test("new local Codex feedback records a verified footer model while leaving unproven session identity empty", async (t) => {
+  const directory = await temporary(t);
+  const terminal = { status: { app: "codex" }, foreground: { pid: 100, name: "codex", argv: ["codex"] } };
+  const event = await captureScream(directory, { terminal: "t2", machine: null }, {
+    runner: async (_program, args) => args[0] === "get" ? JSON.stringify(terminal)
+      : "PRIVATE_PROMPT\nGPT-6.1-Sol high · ~/work · Task · Main [default]",
+    resolver: async () => ({ tool: "codex", sessionId: "", model: "unknown", attribution: "unknown" }),
+  });
+  assert.equal(event.model, "gpt-6.1-sol"); assert.equal(event.modelEvidence, "terminal-footer"); assert.equal(event.sessionId, "");
+  const raw = await readFile(path.join(directory, "events.jsonl"), "utf8");
+  assert.equal(raw.includes("PRIVATE_PROMPT"), false);
+});
+
+test("clearing feedback preserves usage/nudges, excludes late old clicks, and accepts every new click", async (t) => {
+  const directory = await temporary(t);
+  await writeFile(path.join(directory, "insights.json"), "usage history");
+  await appendEvent(directory, { type: "scream", at, model: "unknown" });
+  await appendEvent(directory, { type: "nudge_continue", at, model: "unknown" });
+  const result = await clearScreams(directory);
+  assert.equal(result.removed, 1); assert.deepEqual(await readUserEvents(directory), []);
+  await appendEvent(directory, { type: "scream", at, model: "unknown" });
+  assert.deepEqual(await readUserEvents(directory), [], "an old click resolving after clear must not reappear");
+  await Promise.all(Array.from({ length: 6 }, () => appendEvent(directory, {
+    type: "scream", at: new Date(Date.parse(result.clearedAt) + 1000).toISOString(), model: "gpt-6.1-sol",
+  })));
+  assert.equal((await readUserEvents(directory)).length, 6);
+  assert.equal(await readFile(path.join(directory, "insights.json"), "utf8"), "usage history");
+  const rows = (await readFile(path.join(directory, "events.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(rows.filter((row) => row.type === "nudge_continue").length, 1);
 });

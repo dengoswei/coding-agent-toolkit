@@ -1,22 +1,23 @@
-import { appendFile, mkdir, open, readFile, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { atomicWriteJson, hashKey, localDay, withStoreLock } from "./util.mjs";
 
 export function cleanEvent(value) {
-  if (!value || !["scream", "scream_undo", "nudge_continue"].includes(value.type)
+  if (!value || !["scream", "scream_undo", "scream_clear", "nudge_continue"].includes(value.type)
     || typeof value.id !== "string" || !Number.isFinite(Date.parse(value.at))) throw new Error("Invalid Insights event");
   const text = (field, fallback = "unknown") => typeof value[field] === "string" && value[field].length <= 4096 ? value[field] : fallback;
   return { id: text("id"), type: value.type, at: new Date(value.at).toISOString(), day: localDay(Date.parse(value.at)),
     machine: text("machine", "local"), terminal: text("terminal", ""), tool: text("tool"), sessionId: text("sessionId", ""),
     model: text("model"), origin: text("origin", "user"), outcome: text("outcome", "recorded"),
-    attribution: text("attribution", "unknown"), target: text("target", "") };
+    attribution: text("attribution", "unknown"), modelEvidence: text("modelEvidence", "unknown"), target: text("target", "") };
 }
 
 export async function appendEvent(directory, value) {
   const event = cleanEvent({ ...value, id: value.id ?? randomUUID(), at: value.at ?? new Date().toISOString() });
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  await appendFile(path.join(directory, "events.jsonl"), `${JSON.stringify(event)}\n`, { mode: 0o600 });
+  const file = path.join(directory, "events.jsonl");
+  await withStoreLock(file, () => appendFile(file, `${JSON.stringify(event)}\n`, { mode: 0o600 }), { timeoutMs: 3000 });
   return event;
 }
 
@@ -25,8 +26,31 @@ export async function readUserEvents(directory) {
     const rows = (await readFile(path.join(directory, "events.jsonl"), "utf8")).split("\n").filter(Boolean);
     const events = rows.map((row) => { try { return cleanEvent(JSON.parse(row)); } catch { return null; } }).filter(Boolean);
     const undone = new Set(events.filter((event) => event.type === "scream_undo").map((event) => event.target));
-    return events.filter((event) => event.type === "scream" && !undone.has(event.id));
+    const clearedAt = Math.max(0, ...events.filter((event) => event.type === "scream_clear").map((event) => Date.parse(event.at)));
+    return events.filter((event) => event.type === "scream" && Date.parse(event.at) > clearedAt && !undone.has(event.id));
   } catch (error) { if (error.code === "ENOENT") return []; throw error; }
+}
+
+/** Clear feedback only; retain a private rollback copy and reject late old clicks. */
+export async function clearScreams(directory) {
+  const file = path.join(directory, "events.jsonl");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  return withStoreLock(file, async () => {
+    let raw = "";
+    try { raw = await readFile(file, "utf8"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    const rows = raw.split("\n").filter(Boolean).map((line) => ({ line, event: JSON.parse(line) }));
+    const removed = rows.filter(({ event }) => String(event.type).startsWith("scream"));
+    const keep = rows.filter(({ event }) => !String(event.type).startsWith("scream")).map(({ line }) => line);
+    const marker = cleanEvent({ id: randomUUID(), type: "scream_clear", at: new Date().toISOString() });
+    if (raw) {
+      const backups = path.join(directory, "backups"); await mkdir(backups, { recursive: true, mode: 0o700 });
+      await writeFile(path.join(backups, `events-before-clear-${Date.now()}-${marker.id}.jsonl`), raw, { flag: "wx", mode: 0o600 });
+    }
+    const temporary = path.join(directory, `.events-clear-${marker.id}.jsonl`);
+    await writeFile(temporary, [...keep, JSON.stringify(marker)].join("\n") + "\n", { flag: "wx", mode: 0o600 });
+    await rename(temporary, file);
+    return { removed: removed.filter(({ event }) => event.type === "scream").length, clearedAt: marker.at };
+  }, { timeoutMs: 3000 });
 }
 
 function canonical(value) {

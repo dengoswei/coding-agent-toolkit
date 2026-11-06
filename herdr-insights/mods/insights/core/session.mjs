@@ -4,6 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+/** Read the displayed Codex status bar, never a default or a model in chat text. */
+export function codexFooterModel(screen) {
+  if (typeof screen !== "string") return null;
+  const plain = screen.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  const footer = plain.split(/\r?\n/).slice(-8).reverse();
+  for (const line of footer) {
+    if (/^\s*[›>$#|]/.test(line) || !line.includes("·")) continue;
+    if (!/\b(?:context|window|weekly|remaining|Main)\b/i.test(line)) continue;
+    for (const part of line.split("·")) {
+      const match = /^\s*((?:gpt|codex|claude|gemini|deepseek|qwen|kimi|glm)[\w.\-:/+]+|o\d[\w.\-:/+]*)\s+(?:minimal|low|medium|high|xhigh|max|ultra)\s*$/i.exec(part);
+      if (match) return match[1].toLowerCase();
+    }
+  }
+  return null;
+}
+
 export async function resolveSession(terminal, home = os.homedir()) {
   const foreground = terminal.foreground ?? {};
   const args = Array.isArray(foreground.argv) ? foreground.argv : [];
