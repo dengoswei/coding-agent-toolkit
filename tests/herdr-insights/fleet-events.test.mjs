@@ -135,7 +135,7 @@ test("chicken button precedes native right controls, reacts immediately, and nev
   const result = withScreamControl(source);
   assert.ok(result.indexOf('.id("insights-scream-chicken")') < result.indexOf('.child(button("tab-new",'));
   assert.match(result, /playSound\("mods\/insights\/scream.wav"\)/);
-  assert.match(result, /active\(s => s.w\(16\)\)/);
+  assert.match(result, /scream-chicken-pressed\.svg/);
   assert.doesNotMatch(result, /Saving|screamBusy|undo|lastScream/);
   assert.throws(() => withScreamControl("unsupported tabs"));
 });

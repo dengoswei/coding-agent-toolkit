@@ -159,6 +159,34 @@ export async function applyToolbar(plan, { expand = false } = {}) {
   console.log(`Added Insights beside Files/Changes in personal layout ${layout}; Herdr's tabs mod is unchanged.`);
 }
 
+const SCREAM_CONTROL_V1 = `.child(div().id("insights-scream-chicken").w(32).h(26).flex_none().flex().items_center().justify_center().rounded(6)
+        .hover(s => s.bg(t.hover)).active(s => s.bg(t.selected)).tooltip("尖叫")
+        .on_mouse_down("left", stop).on_click((_e, cx) => insightsScream(cx))
+        .child(image("mods/insights/scream-chicken.svg").id("scream-chicken-image").w(22).h(22).active(s => s.w(16))))
+      `;
+
+const SCREAM_CONTROL_V2 = `.child(div().id("insights-scream-chicken").w(34).h(30).flex_none().flex().items_center().justify_center().cursor_pointer().tooltip("尖叫")
+        .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); this.screamPressed = true; cx.notify(); })
+        .on_mouse_up("left", (_e, cx) => { this.screamPressed = false; cx.notify(); })
+        .on_hover((hovered, cx) => { if (!hovered && this.screamPressed) { this.screamPressed = false; cx.notify(); } })
+        .on_click((_e, cx) => insightsScream(cx))
+        .child(div().id("scream-chicken-surface").w(this.screamPressed ? 32 : 30).h(this.screamPressed ? 26 : 30)
+          .flex().items_center().justify_center().rounded(8).border(1)
+          .border_color(this.screamPressed ? "#ffd54f" : "#00000000")
+          .bg(this.screamPressed ? "#704900" : "#00000000")
+          .transition("width", 75).transition("height", 75)
+          .when(!this.screamPressed, el => el.hover(s => s.bg(t.hover)))
+          .child(image(this.screamPressed ? "mods/insights/scream-chicken-pressed.svg" : "mods/insights/scream-chicken.svg")
+            .id("scream-chicken-image").w(this.screamPressed ? 25 : 20).h(this.screamPressed ? 20 : 26))))
+      `;
+
+/** Replace only our recognized control; retain unrelated personal tab edits. */
+export function upgradeScreamControl(source) {
+  if (source.includes(SCREAM_CONTROL_V2)) return source;
+  if (!source.includes(SCREAM_CONTROL_V1)) throw new Error("Scream control was edited locally; refusing an automatic replacement");
+  return source.replace(SCREAM_CONTROL_V1, SCREAM_CONTROL_V2);
+}
+
 export function withScreamControl(source) {
   const anchor = '.child(button("tab-new",';
   if (!source.includes(anchor) || !source.includes('image } from "gpui-kit"')) throw new Error("Unsupported native tabs version for Scream placement");
@@ -177,12 +205,7 @@ function insightsScream(cx) {
   });
 }
 `;
-  const control = `.child(div().id("insights-scream-chicken").w(32).h(26).flex_none().flex().items_center().justify_center().rounded(6)
-        .hover(s => s.bg(t.hover)).active(s => s.bg(t.selected)).tooltip("尖叫")
-        .on_mouse_down("left", stop).on_click((_e, cx) => insightsScream(cx))
-        .child(image("mods/insights/scream-chicken.svg").id("scream-chicken-image").w(22).h(22).active(s => s.w(16))))
-      `;
-  return `${helper}\n${source.replace(anchor, `${control}${anchor}`)}`;
+  return `${helper}\n${source.replace(anchor, `${SCREAM_CONTROL_V2}${anchor}`)}`;
 }
 
 export async function installScreamControl(appHome) {
@@ -208,6 +231,17 @@ export async function installScreamControl(appHome) {
     await command(appHome, ["check", path.dirname(main)]);
   }
   assertName(mod);
+  const main = path.join(appHome, "mods", mod, "main.js");
+  const previous = await readRegular(appHome, main);
+  const upgraded = upgradeScreamControl(previous);
+  if (upgraded !== previous) {
+    await writeFileAtomic(main, upgraded);
+    try { await command(appHome, ["check", path.dirname(main)]); }
+    catch (error) {
+      if (await readRegular(appHome, main) === upgraded) await writeFileAtomic(main, previous);
+      throw error;
+    }
+  }
   const layout = JSON.parse(original);
   const walk = (node) => {
     if (node.id === "insights-original-tabs") node.content.mod = mod;
@@ -216,7 +250,7 @@ export async function installScreamControl(appHome) {
   walk(layout);
   const updated = `${JSON.stringify(layout, null, 2)}\n`;
   if (updated !== original) await writeFileAtomic(file, updated);
-  await writeFileAtomic(path.join(dataDir(appHome), RECORD), `${JSON.stringify({ ...record, hash: sha256(updated), scream_mod: mod }, null, 2)}\n`);
+  await writeFileAtomic(path.join(dataDir(appHome), RECORD), `${JSON.stringify({ ...record, hash: sha256(updated), scream_mod: mod, scream_skin: 2 }, null, 2)}\n`);
 }
 
 export async function prepareToolbarRemoval(appHome) {
