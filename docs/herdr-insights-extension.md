@@ -85,8 +85,11 @@ to allowlisted fields. Copying or pruning logs does not increment old events or
 remove accepted history. Unterminated final records wait for a complete newline.
 The hook's `model` is a **judge model**, so it is never attributed to the coding
 agent. Session strings are hashed for exported continuation events. Tables show
-calendar week/month/year counts, retained totals, and delivery outcomes per origin
-and tool. Producer history may already have been pruned before first collection.
+calendar week/month/year counts and retained totals grouped by tool, combining
+acknowledged shepherd sends and issued stop-hook continuations in one row.
+Unsuccessful attempts and held/dry-run events remain separate from the counts;
+original trigger sources remain in the retained records. Producer history may
+already have been pruned before first collection.
 
 ## Scream
 

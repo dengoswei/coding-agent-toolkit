@@ -19,6 +19,7 @@ const {
   dayKey,
   dayLabel,
   deriveDashboard,
+  eventStatistics,
   facetStatsAll,
   filterRows,
   filterRowsByRange,
@@ -56,6 +57,34 @@ function row(overrides = {}) {
     ...overrides,
   };
 }
+
+test("continuations combine trigger sources by tool across periods and machine scopes", () => {
+  const event = (id, tool, origin, outcome, day = "2026-11-06", machine = "local") =>
+    ({ id, type: "nudge_continue", tool, origin, outcome, day, machine });
+  const events = [
+    event("1", "codex", "shepherd", "sent"),
+    event("2", "codex", "stop-hook:codex_stop", "issued", "2026-11-05", "remote"),
+    event("3", "codex", "stop-hook:codex_stop", "issued", "2026-10-05"),
+    event("4", "codex", "shepherd", "sent", "2025-12-01"),
+    event("5", "codex", "shepherd", "attempted"),
+    event("6", "codex", "shepherd", "held"),
+    event("7", "claude", "shepherd", "sent"),
+    event("8", "claude", "stop-hook:claude_stop", "issued"),
+    event("9", "cursor", "shepherd", "sent"),
+    event("10", "pi", "stop-hook:pi_settle", "issued"),
+    event("11", "kimi", "shepherd", "sent"),
+  ];
+  const stats = eventStatistics([...events, events[0]], { today: "2026-11-06" });
+  assert.equal(stats.nudges.length, 5);
+  assert.deepEqual(stats.nudges[0], {
+    name: "codex", week: 2, month: 2, year: 3, total: 4,
+    sent: 2, issued: 2, attempted: 1, held: 1,
+  });
+  assert.equal(stats.nudges.find((entry) => entry.name === "claude").total, 2);
+  const local = eventStatistics(events, { today: "2026-11-06", machine: "local" });
+  assert.equal(local.nudges[0].total, 3);
+  assert.equal(local.nudges[0].week, 1);
+});
 
 test("token accounting counts cache only when included and reasoning only once", () => {
   const tokens = { input: 100, output: 20, cacheRead: 80, cacheWrite: 5, reasoning: 5, total: 999 };

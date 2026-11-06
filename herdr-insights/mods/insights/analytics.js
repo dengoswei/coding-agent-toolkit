@@ -981,7 +981,7 @@ export function eventStatistics(events, { today = todayKey(), machine = "all", w
     if (event.type !== "scream" && event.type !== "nudge_continue") continue;
     first = first === null || event.day < first ? event.day : first;
     last = last === null || event.day > last ? event.day : last;
-    const name = event.type === "scream" ? event.model || "unknown" : `${event.origin || "unknown"} · ${event.tool || "unknown"}`;
+    const name = event.type === "scream" ? event.model || "unknown" : event.tool || "unknown";
     const map = event.type === "scream" ? screams : nudges;
     const row = map.get(name) ?? { name, week: 0, month: 0, year: 0, total: 0, sent: 0, issued: 0, attempted: 0, held: 0 };
     const actual = event.type === "scream" || ["sent", "issued"].includes(event.outcome);

@@ -1561,7 +1561,7 @@ export default class Insights extends View {
       .child(this.heatmapCard(c, config, heatmap, selectedDay))
       .child(this.tokenDetailCard(c, heatmap, selectedDay, derived.today, selectedTotals, selectedTop, lifetime, derived.lifetimeTop))
       .child(this.eventTable(c, "Screams by model", derived.eventStats?.screams ?? [], "Explicit user feedback · counts, not an objective model rating"))
-      .child(this.eventTable(c, "Automatic continuations", derived.eventStats?.nudges ?? [], "Acknowledged shepherd sends and issued stop-hook continuations; earlier logs may have been pruned", true))
+      .child(this.eventTable(c, "Automatic continuations", derived.eventStats?.nudges ?? [], "Continuations by tool · all trigger sources combined; earlier logs may have been pruned", true))
       .child(this.sectionHeader("Model usage", c))
       .child(this.filtersBar(c, config, range, derived.facets, years))
       .when(Boolean(derived.modelSeries?.weeks?.length), (el) => el.child(this.modelChartCard(c, derived.modelSeries)))
@@ -1589,11 +1589,11 @@ export default class Insights extends View {
       .when(first, (el) => el.flex_basis(240)).truncate().child(String(value));
     return card(c).gap(G.sm)
       .child(cardHeader(title, description, c))
-      .child(h_flex().w_full().gap(8).children([cell(nudge ? "Origin / tool" : "Model", true), cell("Week"), cell("Month"), cell("Year"), cell("Retained total")]))
+      .child(h_flex().w_full().gap(8).children([cell(nudge ? "Tool" : "Model", true), cell("Week"), cell("Month"), cell("Year"), cell("Retained total")]))
       .when(!rows.length, (el) => el.child(mutedText("No recorded events in this scope.", c)))
       .children(rows.map((row) => v_flex().w_full().gap(2).border_t(1).border_color(c.border).pt(6)
         .child(h_flex().w_full().gap(8).children([cell(row.name, true), cell(row.week), cell(row.month), cell(row.year), cell(row.total)]))
-        .when(nudge, (el) => el.child(mutedText(`${row.sent} acknowledged · ${row.issued} issued · ${row.attempted} unsuccessful attempts · ${row.held} held / dry run (retained history)`, c)))));
+        .when(nudge, (el) => el.child(mutedText(`${row.attempted} unsuccessful attempts · ${row.held} held / dry run (retained history)`, c)))));
   }
 
   filtersBar(c, config, _range, facets, years) {
